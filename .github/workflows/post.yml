@@ -1,0 +1,65 @@
+name: Post Geopolitical Carousel
+
+on:
+  schedule:
+    # 01:00 UTC = 06:00 PKT  |  13:00 UTC = 18:00 PKT
+    - cron: "0 1 * * *"
+    - cron: "0 13 * * *"
+  workflow_dispatch:   # manual trigger for testing
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 🔤 Download fonts from Google Fonts GitHub
+        run: |
+          mkdir -p fonts
+          echo "Downloading PlayfairDisplay-Bold.ttf..."
+          curl -fsSL \
+            "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay-Bold.ttf" \
+            -o fonts/PlayfairDisplay-Bold.ttf && echo "✅ PlayfairDisplay-Bold downloaded" \
+            || echo "⚠️  PlayfairDisplay-Bold download failed — will use fallback font"
+
+          echo "Downloading SourceSerif4-Regular.ttf..."
+          curl -fsSL \
+            "https://github.com/google/fonts/raw/main/ofl/sourceserif4/SourceSerif4%5Bopsz%2Cwght%5D.ttf" \
+            -o fonts/SourceSerif4-Regular.ttf && echo "✅ SourceSerif4-Regular downloaded" \
+            || echo "⚠️  SourceSerif4-Regular download failed — will use fallback font"
+
+      - name: 🤖 Run bot
+        env:
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          CLOUDINARY_CLOUD_NAME:  ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY:     ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET:  ${{ secrets.CLOUDINARY_API_SECRET }}
+          INSTAGRAM_USER_ID:      ${{ secrets.INSTAGRAM_USER_ID }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          GOOGLE_SHEET_ID:        ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_CREDS_JSON:      ${{ secrets.GOOGLE_CREDS_JSON }}
+        run: python src/bot.py
+
+      - name: 📣 Notify on failure (optional Discord webhook)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK" ]; then
+            curl -fsSL -X POST "$DISCORD_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d "{\"content\": \"🚨 **GeopoliticsBot failed** on run $(date -u '+%Y-%m-%d %H:%M UTC'). Check GitHub Actions logs.\"}"
+          else
+            echo "No DISCORD_WEBHOOK set — skipping notification."
+          fi

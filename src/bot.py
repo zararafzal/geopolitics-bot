@@ -123,13 +123,25 @@ Exact structure:
 def fetch_content_from_gemini():
     print("🔍 Fetching top geopolitical story from Gemini...")
     genai.configure(api_key=GEMINI_API_KEY)
+
+    # Use Google Search grounding via the correct tool spec
+    search_tool = genai.protos.Tool(
+        google_search_retrieval=genai.protos.GoogleSearchRetrieval()
+    )
     model = genai.GenerativeModel(
         model_name="gemini-1.5-flash",
-        tools="google_search_retrieval"
+        tools=[search_tool]
     )
     try:
         response = model.generate_content(GEMINI_PROMPT)
-        raw = response.text.strip()
+        # Extract text — grounded responses may have multiple candidates
+        raw = ""
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, "text") and part.text:
+                raw += part.text
+        raw = raw.strip()
+        if not raw:
+            raise RuntimeError("Gemini returned empty response")
         print(f"📥 Gemini raw response (first 300 chars): {raw[:300]}")
     except Exception as e:
         raise RuntimeError(f"Gemini API call failed: {e}")

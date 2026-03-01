@@ -1,14 +1,13 @@
 """
-Instagram Geopolitical News Carousel Bot
-Runs every 12 hours via GitHub Actions
+Geopolitical News Carousel Bot
+Researches top story, generates 10 slides, uploads to Cloudinary.
+Instagram posting removed — slides saved locally and to Cloudinary.
 """
 
 import os
 import json
 import time
-import textwrap
 import datetime
-import requests
 import cloudinary
 import cloudinary.uploader
 from PIL import Image, ImageDraw, ImageFont
@@ -20,23 +19,20 @@ GEMINI_API_KEY        = os.environ["GEMINI_API_KEY"]
 CLOUDINARY_CLOUD_NAME = os.environ["CLOUDINARY_CLOUD_NAME"]
 CLOUDINARY_API_KEY    = os.environ["CLOUDINARY_API_KEY"]
 CLOUDINARY_API_SECRET = os.environ["CLOUDINARY_API_SECRET"]
-INSTAGRAM_USER_ID     = os.environ["INSTAGRAM_USER_ID"]
-INSTAGRAM_ACCESS_TOKEN= os.environ["INSTAGRAM_ACCESS_TOKEN"]
 GOOGLE_SHEET_ID       = os.environ.get("GOOGLE_SHEET_ID", "")
 GOOGLE_CREDS_JSON     = os.environ.get("GOOGLE_CREDS_JSON", "")
 
-GRAPH_API_VERSION = "v19.0"
-GRAPH_BASE        = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output")
 
 # ─── COLORS & FONTS ──────────────────────────────────────────────────────────
 
-C_DARK      = "#0e0c09"
-C_RED       = "#c0392b"
-C_PAPER     = "#f5f0e8"
-C_WHITE     = "#ffffff"
-C_GRAY_LIGHT= "#9b9b9b"
-C_DARK_TEXT = "#1a1a1a"
-C_DARK_BAR  = "#1c1a17"
+C_DARK       = "#0e0c09"
+C_RED        = "#c0392b"
+C_PAPER      = "#f5f0e8"
+C_WHITE      = "#ffffff"
+C_GRAY_LIGHT = "#9b9b9b"
+C_DARK_TEXT  = "#1a1a1a"
+C_DARK_BAR   = "#1c1a17"
 
 FONT_DIR = os.path.join(os.path.dirname(__file__), "..", "fonts")
 
@@ -46,7 +42,10 @@ def load_font(filename, size):
         return ImageFont.truetype(path, size)
     except Exception:
         print(f"⚠️  Font {filename} not found, using default.")
-        return ImageFont.load_default()
+        try:
+            return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", size)
+        except Exception:
+            return ImageFont.load_default()
 
 def hex_to_rgb(h):
     h = h.lstrip("#")
@@ -74,7 +73,7 @@ Cover these categories:
 - Tech or AI used as geopolitical weapons
 
 Write 10 Instagram carousel slides with this EXACT structure:
-- Slide 1  — Hook: alarming opening statement that forces a swipe. No full stop.
+- Slide 1  — Hook: alarming opening statement that forces a swipe
 - Slide 2  — What happened: plain English, who did what to whom
 - Slide 3  — The context: essential history in 2 sentences
 - Slide 4  — The players: 3 key actors and what each wants
@@ -94,8 +93,8 @@ RULES FOR COPY:
 CAPTION: 120-150 words. Clean authoritative tone. No emojis in body.
 End with: "Full breakdown in the carousel. Save this post."
 
-HASHTAGS: 20-25 tags. Mix broad (#WorldNews #Geopolitics) and specific
-(#CountryName #TopicName #LeaderName). Always include #GeopoliticsDaily #FollowForUpdates.
+HASHTAGS: 20-25 tags. Mix broad (#WorldNews #Geopolitics) and specific tags.
+Always include #GeopoliticsDaily #FollowForUpdates.
 
 RETURN ONLY a single valid JSON object. No markdown. No backticks. No explanation.
 Exact structure:
@@ -146,7 +145,6 @@ def fetch_content_from_gemini():
         data = json.loads(raw)
     except json.JSONDecodeError as e:
         print(f"⚠️  JSON parse error: {e}. Attempting cleanup...")
-        # Remove any trailing content after last }
         last_brace = raw.rfind("}")
         if last_brace != -1:
             raw = raw[:last_brace+1]
@@ -161,7 +159,6 @@ def fetch_content_from_gemini():
 SIZE = (1080, 1080)
 
 def draw_wrapped_text(draw, text, font, x, y, max_width, fill, line_spacing=1.3):
-    """Draw wrapped text and return the y position after the last line."""
     words = text.split()
     lines = []
     current = ""
@@ -185,106 +182,74 @@ def draw_wrapped_text(draw, text, font, x, y, max_width, fill, line_spacing=1.3)
     return y
 
 def make_slide_1(slide):
-    """Cover slide — dark background."""
     img = Image.new("RGB", SIZE, hex_to_rgb(C_DARK))
     draw = ImageDraw.Draw(img)
 
-    # Top red bar
     draw.rectangle([(0, 0), (1080, 8)], fill=hex_to_rgb(C_RED))
 
-    # BREAKING NEWS label
-    font_label = load_font("SourceSerif4-Regular.ttf", 28)
-    draw.text((48, 36), "⚡ BREAKING NEWS", font=font_label, fill=hex_to_rgb(C_RED))
-
-    # Headline
+    font_label    = load_font("SourceSerif4-Regular.ttf", 28)
     font_headline = load_font("PlayfairDisplay-Bold.ttf", 72)
+    font_body     = load_font("SourceSerif4-Regular.ttf", 36)
+    font_swipe    = load_font("SourceSerif4-Regular.ttf", 30)
+    font_counter  = load_font("SourceSerif4-Regular.ttf", 26)
+
+    draw.text((48, 36), "⚡ BREAKING NEWS", font=font_label, fill=hex_to_rgb(C_RED))
     draw_wrapped_text(draw, slide["headline"].upper(), font_headline,
                       48, 160, 984, hex_to_rgb(C_WHITE), line_spacing=1.2)
-
-    # Body subtext
-    font_body = load_font("SourceSerif4-Regular.ttf", 36)
     draw_wrapped_text(draw, slide["body"], font_body,
                       48, 680, 984, hex_to_rgb(C_GRAY_LIGHT), line_spacing=1.4)
-
-    # SWIPE CTA
-    font_swipe = load_font("SourceSerif4-Regular.ttf", 30)
     draw.text((48, 980), "SWIPE TO READ →", font=font_swipe, fill=hex_to_rgb(C_RED))
-
-    # Slide counter
-    font_counter = load_font("SourceSerif4-Regular.ttf", 26)
-    draw.text((990, 980), "01/10", font=font_counter, fill=hex_to_rgb(C_GRAY_LIGHT), anchor="ra")
-
+    draw.text((1032, 980), "01/10", font=font_counter, fill=hex_to_rgb(C_GRAY_LIGHT))
     return img
 
 def make_slide_body(slide, idx):
-    """Body slides 2-9 — warm paper background."""
     img = Image.new("RGB", SIZE, hex_to_rgb(C_PAPER))
     draw = ImageDraw.Draw(img)
 
-    # Top dark bar
+    font_handle   = load_font("SourceSerif4-Regular.ttf", 26)
+    font_big_num  = load_font("PlayfairDisplay-Bold.ttf", 220)
+    font_headline = load_font("PlayfairDisplay-Bold.ttf", 62)
+    font_body     = load_font("SourceSerif4-Regular.ttf", 38)
+    font_counter  = load_font("SourceSerif4-Regular.ttf", 26)
+
     draw.rectangle([(0, 0), (1080, 72)], fill=hex_to_rgb(C_DARK_BAR))
-    font_handle = load_font("SourceSerif4-Regular.ttf", 26)
     draw.text((540, 36), "@WORLDGEOPOLITICS", font=font_handle,
               fill=hex_to_rgb(C_WHITE), anchor="mm")
+    draw.text((20, 60), f"0{idx}", font=font_big_num, fill=(230, 224, 210))
 
-    # Decorative large slide number
-    font_big_num = load_font("PlayfairDisplay-Bold.ttf", 220)
-    draw.text((20, 60), f"0{idx}", font=font_big_num,
-              fill=(230, 224, 210))  # very light on paper
-
-    # Headline
-    font_headline = load_font("PlayfairDisplay-Bold.ttf", 62)
     y = draw_wrapped_text(draw, slide["headline"], font_headline,
                           60, 340, 960, hex_to_rgb(C_DARK_TEXT), line_spacing=1.2)
-
-    # Red divider
     draw.rectangle([(60, y + 20), (200, y + 26)], fill=hex_to_rgb(C_RED))
-
-    # Body text
-    font_body = load_font("SourceSerif4-Regular.ttf", 38)
     draw_wrapped_text(draw, slide["body"], font_body,
                       60, y + 60, 960, (80, 72, 60), line_spacing=1.5)
 
-    # Bottom red bar
     draw.rectangle([(0, 1072), (1080, 1080)], fill=hex_to_rgb(C_RED))
-
-    # Slide counter
-    font_counter = load_font("SourceSerif4-Regular.ttf", 26)
-    num_str = f"{idx:02d}/10"
-    draw.text((1032, 1042), num_str, font=font_counter,
-              fill=hex_to_rgb(C_WHITE), anchor="ra")
-
+    draw.text((1032, 1042), f"{idx:02d}/10", font=font_counter, fill=hex_to_rgb(C_WHITE))
     return img
 
 def make_slide_10(slide):
-    """CTA slide — red background."""
     img = Image.new("RGB", SIZE, hex_to_rgb(C_RED))
     draw = ImageDraw.Draw(img)
 
-    # Dark top bar
-    draw.rectangle([(0, 0), (1080, 12)], fill=hex_to_rgb(C_DARK))
-
-    # Headline
     font_headline = load_font("PlayfairDisplay-Bold.ttf", 72)
+    font_body     = load_font("SourceSerif4-Regular.ttf", 40)
+    font_follow   = load_font("SourceSerif4-Regular.ttf", 34)
+
+    draw.rectangle([(0, 0), (1080, 12)], fill=hex_to_rgb(C_DARK))
     y = draw_wrapped_text(draw, slide["headline"].upper(), font_headline,
                           60, 160, 960, hex_to_rgb(C_WHITE), line_spacing=1.2)
-
-    # Body
-    font_body = load_font("SourceSerif4-Regular.ttf", 40)
     draw_wrapped_text(draw, slide["body"], font_body,
                       60, y + 60, 960, hex_to_rgb(C_WHITE), line_spacing=1.5)
-
-    # Dark follow box at bottom
     draw.rectangle([(0, 880), (1080, 1080)], fill=hex_to_rgb(C_DARK))
-    font_follow = load_font("SourceSerif4-Regular.ttf", 34)
     draw.text((540, 980), "FOLLOW @WORLDGEOPOLITICS FOR UPDATES",
               font=font_follow, fill=hex_to_rgb(C_WHITE), anchor="mm")
-
     return img
 
 def generate_slides(data):
     print("🎨 Generating slide images...")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     images = []
+    paths  = []
     for slide in data["slides"]:
         n = slide["slide_number"]
         if n == 1:
@@ -293,13 +258,17 @@ def generate_slides(data):
             img = make_slide_10(slide)
         else:
             img = make_slide_body(slide, n)
+
+        path = os.path.join(OUTPUT_DIR, f"slide_{n:02d}.jpg")
+        img.save(path, "JPEG", quality=92)
         images.append(img)
-        print(f"  ✅ Slide {n} generated")
-    return images
+        paths.append(path)
+        print(f"  ✅ Slide {n} saved → {path}")
+    return images, paths
 
 # ─── CLOUDINARY UPLOAD ───────────────────────────────────────────────────────
 
-def upload_images_to_cloudinary(images, topic):
+def upload_to_cloudinary(paths, topic):
     print("☁️  Uploading images to Cloudinary...")
     cloudinary.config(
         cloud_name=CLOUDINARY_CLOUD_NAME,
@@ -310,13 +279,11 @@ def upload_images_to_cloudinary(images, topic):
     slug = topic.lower().replace(" ", "_")[:30]
     ts   = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M")
 
-    for i, img in enumerate(images):
-        tmp_path = f"/tmp/slide_{i+1:02d}.jpg"
-        img.save(tmp_path, "JPEG", quality=92)
+    for i, path in enumerate(paths):
         public_id = f"geopolitics/{slug}_{ts}_slide_{i+1:02d}"
         try:
             result = cloudinary.uploader.upload(
-                tmp_path,
+                path,
                 public_id=public_id,
                 overwrite=True,
                 resource_type="image"
@@ -325,69 +292,15 @@ def upload_images_to_cloudinary(images, topic):
             urls.append(url)
             print(f"  ✅ Slide {i+1} uploaded: {url}")
         except Exception as e:
-            raise RuntimeError(f"Cloudinary upload failed for slide {i+1}: {e}\nResponse: {result if 'result' in dir() else 'N/A'}")
+            raise RuntimeError(f"Cloudinary upload failed for slide {i+1}: {e}")
     return urls
-
-# ─── INSTAGRAM POSTING ───────────────────────────────────────────────────────
-
-def post_carousel_to_instagram(image_urls, caption, hashtags):
-    print("📸 Posting carousel to Instagram...")
-    full_caption = f"{caption}\n\n{hashtags}"
-    container_ids = []
-
-    # Step 1: Upload each image as carousel item
-    for i, url in enumerate(image_urls):
-        payload = {
-            "image_url": url,
-            "is_carousel_item": "true",
-            "access_token": INSTAGRAM_ACCESS_TOKEN
-        }
-        r = requests.post(f"{GRAPH_BASE}/{INSTAGRAM_USER_ID}/media", data=payload)
-        resp = r.json()
-        if "id" not in resp:
-            raise RuntimeError(f"Failed to create container for slide {i+1}: {resp}")
-        container_ids.append(resp["id"])
-        print(f"  ✅ Container created for slide {i+1}: {resp['id']}")
-        time.sleep(1)
-
-    # Step 2: Create carousel container
-    carousel_payload = {
-        "media_type": "CAROUSEL",
-        "children": ",".join(container_ids),
-        "caption": full_caption,
-        "access_token": INSTAGRAM_ACCESS_TOKEN
-    }
-    r = requests.post(f"{GRAPH_BASE}/{INSTAGRAM_USER_ID}/media", data=carousel_payload)
-    carousel_resp = r.json()
-    if "id" not in carousel_resp:
-        raise RuntimeError(f"Failed to create carousel container: {carousel_resp}")
-    creation_id = carousel_resp["id"]
-    print(f"  ✅ Carousel container created: {creation_id}")
-
-    # Step 3: Wait for processing
-    print("  ⏳ Waiting 10 seconds for Instagram processing...")
-    time.sleep(10)
-
-    # Step 4: Publish
-    publish_payload = {
-        "creation_id": creation_id,
-        "access_token": INSTAGRAM_ACCESS_TOKEN
-    }
-    r = requests.post(f"{GRAPH_BASE}/{INSTAGRAM_USER_ID}/media_publish", data=publish_payload)
-    pub_resp = r.json()
-    if "id" not in pub_resp:
-        raise RuntimeError(f"Failed to publish carousel: {pub_resp}")
-    post_id = pub_resp["id"]
-    print(f"  ✅ Carousel published! Post ID: {post_id}")
-    return post_id
 
 # ─── GOOGLE SHEETS LOGGING ───────────────────────────────────────────────────
 
-def log_to_google_sheets(data, post_id):
+def log_to_google_sheets(data, image_urls):
     if not GOOGLE_CREDS_JSON or not GOOGLE_SHEET_ID:
         print("⚠️  Google Sheets env vars not set — skipping log.")
         return
-
     print("📊 Logging to Google Sheets...")
     try:
         import gspread
@@ -409,13 +322,28 @@ def log_to_google_sheets(data, post_id):
             data["region"],
             data["story_summary"][:200],
             data["caption"][:200],
-            post_id,
-            "✅ Posted"
+            image_urls[0] if image_urls else "N/A",
+            "✅ Generated"
         ]
         sheet.append_row(row)
-        print(f"  ✅ Logged to Google Sheets")
+        print("  ✅ Logged to Google Sheets")
     except Exception as e:
         print(f"  ⚠️  Google Sheets logging failed (non-fatal): {e}")
+
+# ─── SAVE CAPTION & HASHTAGS ─────────────────────────────────────────────────
+
+def save_caption(data):
+    path = os.path.join(OUTPUT_DIR, "caption.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("=== TOPIC ===\n")
+        f.write(data["topic"] + "\n\n")
+        f.write("=== CAPTION ===\n")
+        f.write(data["caption"] + "\n\n")
+        f.write("=== HASHTAGS ===\n")
+        f.write(data["hashtags"] + "\n\n")
+        f.write("=== STORY SUMMARY ===\n")
+        f.write(data["story_summary"] + "\n")
+    print(f"📝 Caption saved → {path}")
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
@@ -428,24 +356,26 @@ def main():
     # 1. Research + write content
     data = fetch_content_from_gemini()
 
-    # 2. Generate slide images
-    images = generate_slides(data)
+    # 2. Generate + save slides locally
+    images, paths = generate_slides(data)
 
     # 3. Upload to Cloudinary
-    image_urls = upload_images_to_cloudinary(images, data["topic"])
+    image_urls = upload_to_cloudinary(paths, data["topic"])
 
-    # 4. Post to Instagram
-    post_id = post_carousel_to_instagram(
-        image_urls, data["caption"], data["hashtags"]
-    )
+    # 4. Save caption and hashtags to text file
+    save_caption(data)
 
-    # 5. Log to Google Sheets
-    log_to_google_sheets(data, post_id)
+    # 5. Log to Google Sheets (optional)
+    log_to_google_sheets(data, image_urls)
 
     print("=" * 60)
-    print(f"🎉 SUCCESS — Post ID: {post_id}")
+    print(f"🎉 SUCCESS")
     print(f"📰 Topic: {data['topic']}")
     print(f"🌏 Region: {data['region']}")
+    print(f"🖼️  Slides saved to: {OUTPUT_DIR}")
+    print(f"☁️  Cloudinary URLs:")
+    for i, url in enumerate(image_urls):
+        print(f"   Slide {i+1}: {url}")
     print("=" * 60)
 
 if __name__ == "__main__":

@@ -11,11 +11,11 @@ import datetime
 import cloudinary
 import cloudinary.uploader
 from PIL import Image, ImageDraw, ImageFont
-import google.generativeai as genai
+from groq import Groq
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
-GEMINI_API_KEY        = os.environ["GEMINI_API_KEY"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 CLOUDINARY_CLOUD_NAME = os.environ["CLOUDINARY_CLOUD_NAME"]
 CLOUDINARY_API_KEY    = os.environ["CLOUDINARY_API_KEY"]
 CLOUDINARY_API_SECRET = os.environ["CLOUDINARY_API_SECRET"]
@@ -121,17 +121,21 @@ Exact structure:
 """
 
 def fetch_content_from_gemini():
-    print("🔍 Fetching top geopolitical story from Gemini...")
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    print("🔍 Fetching top geopolitical story via Groq...")
+    client = Groq(api_key=GROQ_API_KEY)
     try:
-        response = model.generate_content(GEMINI_PROMPT)
-        raw = response.text.strip()
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": GEMINI_PROMPT}],
+            temperature=0.7,
+            max_tokens=4000,
+        )
+        raw = completion.choices[0].message.content.strip()
         if not raw:
-            raise RuntimeError("Gemini returned empty response")
-        print(f"📥 Gemini raw response (first 300 chars): {raw[:300]}")
+            raise RuntimeError("Groq returned empty response")
+        print(f"📥 Groq raw response (first 300 chars): {raw[:300]}")
     except Exception as e:
-        raise RuntimeError(f"Gemini API call failed: {e}")
+        raise RuntimeError(f"Groq API call failed: {e}")
 
     # Strip markdown fences if present
     if raw.startswith("```"):
